@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
+using AutoMapper;
 using DatingApp.API.Data;
 using DatingApp.API.Dtos;
 using DatingApp.API.Models;
@@ -15,62 +16,68 @@ namespace DatingApp.API.Controllers
     public class AuthController : Controller
     {
         private readonly IAuthRepository _repo;
-        private readonly IConfiguration _config; 
-        public AuthController(IAuthRepository repo, IConfiguration config)
+        private readonly IConfiguration _config;
+        private readonly IMapper _mapper;
+        public AuthController(IAuthRepository repo,
+            IMapper mapper,
+            IConfiguration config)
         {
+            _mapper = mapper;
             _config = config;
             _repo = repo;
 
         }
 
-        [HttpPost("register")]
-        public async Task<IActionResult> Register([FromBody]UserForRegisterDto userForReg)
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody]UserForRegisterDto userForReg)
+    {
+        userForReg.Username = userForReg.Username.ToLower();
+
+        if (await _repo.UserExists(userForReg.Username))
+            ModelState.AddModelError("Username", "Username is already taken");
+
+        // Validate Request
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var userToCreate = new User
         {
-            userForReg.Username = userForReg.Username.ToLower();
+            Username = userForReg.Username
+        };
 
-            if (await _repo.UserExists(userForReg.Username))
-                ModelState.AddModelError("Username", "Username is already taken");
+        var createUser = await _repo.Register(userToCreate, userForReg.Password);
 
-            // Validate Request
-            if (!ModelState.IsValid)
-                return BadRequest(ModelState);
+        return StatusCode(201);
+    }
 
-            var userToCreate = new User
-            {
-                Username = userForReg.Username
-            };
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] UserForLoginDto userForLogin)
+    {
+        var userFromRepo = await _repo.Login(userForLogin.Username.ToLower(), userForLogin.Password);
 
-            var createUser = await _repo.Register(userToCreate, userForReg.Password);
+        if (userFromRepo == null)
+            return Unauthorized();
 
-            return StatusCode(201);
-        }
-
-        [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] UserForLoginDto userForLogin)
+        // generate Token
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var key = Encoding.ASCII.GetBytes(_config.GetSection("AppSettings:Token").Value);
+        var tokenDescriptor = new SecurityTokenDescriptor
         {
-            var userFromRepo = await _repo.Login(userForLogin.Username.ToLower(), userForLogin.Password);
-
-            if (userFromRepo == null)
-                return Unauthorized();
-
-            // generate Token
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.ASCII.GetBytes(_config.GetSection("AppSettings:Token").Value);
-            var tokenDescriptor = new SecurityTokenDescriptor
+            Subject = new System.Security.Claims.ClaimsIdentity(new Claim[]
             {
-                Subject = new System.Security.Claims.ClaimsIdentity(new Claim[]
-                {
                     new Claim(ClaimTypes.NameIdentifier, userFromRepo.Id.ToString()),
                     new Claim(ClaimTypes.Name, userFromRepo.Username)
-                }),
-                Expires = System.DateTime.Now.AddDays(1),
-                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha512Signature)
-            };
-            var token = tokenHandler.CreateToken(tokenDescriptor);
-            var tokenString = tokenHandler.WriteToken(token);
+            }),
+            Expires = System.DateTime.Now.AddDays(1),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key),
+                SecurityAlgorithms.HmacSha512Signature)
+        };
+        var token = tokenHandler.CreateToken(tokenDescriptor);
+        var tokenString = tokenHandler.WriteToken(token);
 
-            return Ok(new { tokenString });
-        }
+        var user = _mapper.Map<UserForListDto>(userFromRepo);
+
+            return Ok(new { tokenString, user });
     }
+}
 }
