@@ -1,0 +1,1 @@
+This is the API part of a UDemy course "Build an app with ASPNET Core and Angular from scratch"
